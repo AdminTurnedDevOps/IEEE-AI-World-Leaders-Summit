@@ -1,137 +1,3 @@
-## Gateway Setup
-
-1. Create env variable for Anthropic key
-
-```
-export ANTHROPIC_API_KEY=
-```
-
-2. Create a Gateway for Anthropic
-
-A `Gateway` resource is used to trigger kgateway to deploy agentgateway data plane Pods
-
-The Agentgateway data plane Pod is the Pod that gets created when a Gateway object is created in a Kubernetes environment where Agentgateway is deployed as the Gateway API implementation.
-```
-kubectl apply -f- <<EOF
-kind: Gateway
-apiVersion: gateway.networking.k8s.io/v1
-metadata:
-  name: agentgateway
-  namespace: gloo-system
-  labels:
-    app: agentgateway
-spec:
-  gatewayClassName: agentgateway-enterprise
-  listeners:
-  - protocol: HTTP
-    port: 8080
-    name: http
-    allowedRoutes:
-      namespaces:
-        from: All
-EOF
-```
-
-3. Create a secret to store the Claude API key
-```
-kubectl apply -f- <<EOF
-apiVersion: v1
-kind: Secret
-metadata:
-  name: anthropic-secret
-  namespace: gloo-system
-  labels:
-    app: agentgateway
-type: Opaque
-stringData:
-  Authorization: $ANTHROPIC_API_KEY
-EOF
-```
-
-4. Create a `Backend` object 
-
-A Backend resource to define a backing destination that you want kgateway to route to. In this case, it's Claude.
-```
-kubectl apply -f- <<EOF
-apiVersion: gateway.kgateway.dev/v1alpha1
-kind: AgentgatewayBackend
-metadata:
-  labels:
-    app: agentgateway
-  name: anthropic
-  namespace: gloo-system
-spec:
-  ai:
-    provider:
-        anthropic:
-          model: "claude-3-5-haiku-latest"
-  policies:
-    auth:
-      secretRef:
-        name: anthropic-secret
-EOF
-```
-
-5. Ensure everything is running as expected
-```
-kubectl get agentgatewaybackend -n gloo-system
-```
-
-6. Apply the Route so you can reach the LLM
-```
-kubectl apply -f- <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: HTTPRoute
-metadata:
-  name: claude
-  namespace: gloo-system
-  labels:
-    app: agentgateway
-spec:
-  parentRefs:
-    - name: agentgateway
-      namespace: gloo-system
-  rules:
-  - matches:
-    - path:
-        type: PathPrefix
-        value: /anthropic
-    filters:
-    - type: URLRewrite
-      urlRewrite:
-        path:
-          type: ReplaceFullPath
-          replaceFullPath: /v1/chat/completions
-    backendRefs:
-    - name: anthropic
-      namespace: gloo-system
-      group: gateway.kgateway.dev
-      kind: AgentgatewayBackend
-EOF
-```
-
-7. Capture the LB IP of the service. This will be used later to send a request to the LLM.
-```
-export INGRESS_GW_ADDRESS=$(kubectl get svc -n gloo-system agentgateway -o jsonpath="{.status.loadBalancer.ingress[0]['hostname','ip']}")
-echo $INGRESS_GW_ADDRESS
-```
-
-8. Test the LLM connectivity
-```
-curl "$INGRESS_GW_ADDRESS:8080/anthropic" -H content-type:application/json -H x-api-key:$ANTHROPIC_API_KEY -H "anthropic-version: 2023-06-01" -d '{
-  "messages": [
-    {
-      "role": "system",
-      "content": "You are a skilled cloud-native network engineer."
-    },
-    {
-      "role": "user",
-      "content": "What is a credit card?"
-    }
-  ]
-}' | jq
-```
-
 ## MCP Server Connection
 
 1. . Deploy the MCP Server
@@ -234,24 +100,97 @@ EOF
 ```
 export GATEWAY_IP=$(kubectl get svc agentgateway -n gloo-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 echo $GATEWAY_IP
+```
 
+6. Open MCP Inspector
+```
+npx modelcontextprotocol/inspector#0.16.2
+```
 
-curl -v "http://${GATEWAY_IP}:8080/" \
-  -H "Content-Type: application/json" \
-  -H "Accept: application/json, text/event-stream" \
-  -d '{
-    "jsonrpc": "2.0",
-    "method": "initialize",
-    "params": {
-      "protocolVersion": "2024-11-05",
-      "capabilities": {},
-      "clientInfo": {
-        "name": "test-client",
-        "version": "1.0.0"
-      }
-    },
-    "id": 1
-  }'
+URL to put into Inspector: `http://YOUR_ALB_LB_IP:8080/mcp`
+
+## Secure Connectivity
+
+```
+kubectl apply -f- <<EOF
+apiVersion: gloo.solo.io/v1alpha1
+kind: GlooTrafficPolicy
+metadata:
+  name: jwt
+  namespace: gloo-system
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: agentgateway
+  glooJWT:
+    beforeExtAuth:
+      providers:
+        selfminted:
+          issuer: solo.io
+          jwks:
+            local:
+              key: '{"keys":[{"kty":"RSA","kid":"solo-public-key-001","use":"sig","alg":"RS256","n":"AOfIaJMUm7564sWWNHaXt_hS8H0O1Ew59-nRqruMQosfQqa7tWne5lL3m9sMAkfa3Twx0LMN_7QqRDoztvV3Wa_JwbMzb9afWE-IfKIuDqkvog6s-xGIFNhtDGBTuL8YAQYtwCF7l49SMv-GqyLe-nO9yJW-6wIGoOqImZrCxjxXFzF6mTMOBpIODFj0LUZ54QQuDcD1Nue2LMLsUvGa7V1ZHsYuGvUqzvXFBXMmMS2OzGir9ckpUhrUeHDCGFpEM4IQnu-9U8TbAJxKE5Zp8Nikefr2ISIG2Hk1K2rBAc_HwoPeWAcAWUAR5tWHAxx-UXClSZQ9TMFK850gQGenUp8","e":"AQAB"}]}'
+EOF
+```
+
+2. Save the token for "Bob"
+```
+eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCIsImtpZCI6InNvbG8tcHVibGljLWtleS0wMDEifQ.eyJpc3MiOiJzb2xvLmlvIiwib3JnIjoic29sby5pbyIsInN1YiI6ImJvYiIsInRlYW0iOiJvcHMiLCJleHAiOjIwNzQyNzQ5NTQsImxsbXMiOnsibWlzdHJhbGFpIjpbIm1pc3RyYWwtbGFyZ2UtbGF0ZXN0Il19fQ.GF_uyLpZSTT1DIvJeO_eish1WDjMaS4BQSifGQhqPRLjzu3nXtPkaBRjceAmJi9gKZYAzkT25MIrT42ZIe3bHilrd1yqittTPWrrM4sWDDeldnGsfU07DWJHyboNapYR-KZGImSmOYshJlzm1tT_Bjt3-RK3OBzYi90_wl0dyAl9D7wwDCzOD4MRGFpoMrws_OgVrcZQKcadvIsH8figPwN4mK1U_1mxuL08RWTu92xBcezEO4CdBaFTUbkYN66Y2vKSTyPCxg3fLtg1mvlzU1-Wgm2xZIiPiarQHt6Uq7v9ftgzwdUBQM1AYLvUVhCN6XkkR9OU3p0OXiqEDjAxcg
+```
+
+3. Try to re-connect to the MCP Server. You'll see something similar to the below:
+```
+Connection Error - Check if your MCP server is running and proxy token is correct
+```
+
+4. Click on **Authentication**
+- Header Name: **Authorization**
+- Bearer Token: Bobs Token from step 2
+
+## Specify Tool List
+
+1. Create a policy that specifies no tools listed
+```
+kubectl apply -f- <<EOF
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: jwt-rbac
+  namespace: gloo-system
+spec:
+  targetRefs:
+    - group: gateway.kgateway.dev
+      kind: Backend
+      name: mcp-backend
+  rbac:
+    policy:
+      matchExpressions:
+        - 'mcp.tool.name == ""'
+EOF
+```
+
+2. Disconnect and reconnect via the MCP Inspector and you should see no tools
+
+3. Update the policy to include the **Fetch** tool
+
+```
+kubectl apply -f- <<EOF
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: jwt-rbac
+  namespace: gloo-system
+spec:
+  targetRefs:
+    - group: gateway.kgateway.dev
+      kind: Backend
+      name: mcp-backend
+  rbac:
+    policy:
+      matchExpressions:
+        - 'mcp.tool.name == "fetch"'
+EOF
 ```
 
 ## Connecting To Remote MCP Servers
