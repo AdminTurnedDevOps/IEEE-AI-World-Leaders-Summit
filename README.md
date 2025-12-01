@@ -111,6 +111,7 @@ URL to put into Inspector: `http://YOUR_ALB_LB_IP:8080/mcp`
 
 ## Secure Connectivity
 
+1. Add in a traffic policy for auth based on a JWT token
 ```
 kubectl apply -f- <<EOF
 apiVersion: gloo.solo.io/v1alpha1
