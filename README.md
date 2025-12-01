@@ -53,7 +53,8 @@ spec:
       static:
         host: mcp-website-fetcher.default.svc.cluster.local
         port: 80
-        protocol: SSE
+        protocol: StreamableHTTP
+        #protocol: SSE
 EOF
 ```
 
