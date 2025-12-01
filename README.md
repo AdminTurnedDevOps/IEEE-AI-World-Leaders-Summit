@@ -178,7 +178,7 @@ apiVersion: gateway.kgateway.dev/v1alpha1
 kind: Backend
 metadata:
   name: mcp-backend
-  namespace: kgateway-system
+  namespace: gloo-system
 spec:
   type: MCP
   mcp:
@@ -198,9 +198,9 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
   name: agentgateway
-  namespace: kgateway-system
+  namespace: gloo-system
 spec:
-  gatewayClassName: agentgateway
+  gatewayClassName: agentgateway-enterprise
   listeners:
   - name: http
     port: 8080
@@ -218,7 +218,7 @@ apiVersion: gateway.networking.k8s.io/v1
 kind: HTTPRoute
 metadata:
   name: mcp-route
-  namespace: kgateway-system
+  namespace: gloo-system
 spec:
   parentRefs:
   - name: agentgateway
@@ -232,7 +232,7 @@ EOF
 
 5. Test the Gateway/route
 ```
-export GATEWAY_IP=$(kubectl get svc agentgateway -n kgateway-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
+export GATEWAY_IP=$(kubectl get svc agentgateway -n gloo-system -o jsonpath='{.status.loadBalancer.ingress[0].ip}')
 echo $GATEWAY_IP
 
 
